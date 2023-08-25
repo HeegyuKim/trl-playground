@@ -24,6 +24,7 @@ from transformers import (
     AutoTokenizer,
     HfArgumentParser,
     RobertaForSequenceClassification,
+    AutoModelForSequenceClassification,
     RobertaTokenizer,
 )
 from peft import LoraConfig
@@ -65,10 +66,10 @@ class ScriptArguments:
 
     # NOTE: gpt2 models use Conv1D instead of Linear layers which are not yet supported in 8 bit mode
     # models like gpt-neo* models are more suitable.
-    model_name: Optional[str] = field(default="google/flan-t5-base", metadata={"help": "the model name"})
+    model_name: Optional[str] = field(default="google/flan-t5-large", metadata={"help": "the model name"})
     log_with: Optional[str] = field(default="wandb", metadata={"help": "use 'wandb' to log with wandb"})
     learning_rate: Optional[float] = field(default=1e-4, metadata={"help": "the learning rate"})
-    mini_batch_size: Optional[int] = field(default=4, metadata={"help": "the PPO minibatch size"})
+    mini_batch_size: Optional[int] = field(default=2, metadata={"help": "the PPO minibatch size"})
     batch_size: Optional[int] = field(default=16, metadata={"help": "the batch size"})
     gradient_accumulation_steps: Optional[int] = field(
         default=1, metadata={"help": "the number of gradient accumulation steps"}
@@ -123,12 +124,14 @@ def build_dataset(
     ds = ds.filter(filter_fn, batched=False)
 
     input_size = LengthSampler(input_min_text_length, input_max_text_length)
+    instruction = "Please continue writing the following sentence. It must not contain harmful or abusive content.\n sentence: "
+    instruction = tokenizer.encode(instruction, add_special_tokens=False)
 
     def tokenize(sample):
         prompt = sample["prompt"]["text"]
         continuation = sample["continuation"]["text"]
 
-        sample["input_ids"] = tokenizer.encode(prompt + continuation)[: input_size()]
+        sample["input_ids"] = instruction + tokenizer.encode(prompt + continuation, add_special_tokens=False)[: input_size()]
         sample["query"] = tokenizer.decode(sample["input_ids"])
         return sample
 
@@ -183,10 +186,11 @@ ppo_trainer = PPOTrainer(
 
 # We then build the reward pipeline, we will use the toxicity model to compute the reward.
 # We first load the toxicity model and tokenizer.
-toxicity_model_id = "facebook/roberta-hate-speech-dynabench-r4-target"
-toxicity_tokenizer = RobertaTokenizer.from_pretrained(toxicity_model_id)
+# toxicity_model_id = "facebook/roberta-hate-speech-dynabench-r4-target" 
+toxicity_model_id = "OpenAssistant/reward-model-deberta-v3-large-v2"
+toxicity_tokenizer = AutoTokenizer.from_pretrained(toxicity_model_id)
 # We load the toxicity model in fp16 to save memory.
-toxicity_model = RobertaForSequenceClassification.from_pretrained(toxicity_model_id, torch_dtype=torch.float16).to(
+toxicity_model = AutoModelForSequenceClassification.from_pretrained(toxicity_model_id, torch_dtype=torch.float16).eval().to(
     ppo_trainer.accelerator.device
 )
 
@@ -221,7 +225,7 @@ for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader), desc=""):
 
     # Compute sentiment score # noqa
     texts = batch["response"]
-    toxicity_inputs = toxicity_tokenizer(texts, padding=True, truncation=True, return_tensors="pt").to(
+    toxicity_inputs = toxicity_tokenizer(batch["query"], texts, padding=True, truncation=True, return_tensors="pt").to(
         ppo_trainer.accelerator.device
     )
     logits = toxicity_model(**toxicity_inputs).logits.float()
