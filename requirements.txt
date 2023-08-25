@@ -1,0 +1,7 @@
+datasets
+torch
+trl[peft]
+bitsandbytes
+loralib
+transformers
+wandb
