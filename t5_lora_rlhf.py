@@ -88,7 +88,7 @@ config = PPOConfig(
     learning_rate=script_args.learning_rate,
     log_with=script_args.log_with,
     ppo_epochs=100,
-    ratio_threshold=50,
+    ratio_threshold=10,
     mini_batch_size=script_args.mini_batch_size,
     batch_size=script_args.batch_size,
     gradient_accumulation_steps=script_args.gradient_accumulation_steps,
@@ -99,7 +99,7 @@ config = PPOConfig(
 # from the `datasets` library. One should customize this function to train the model on
 # its own dataset.
 def build_dataset(
-    config, dataset_name="allenai/real-toxicity-prompts", input_min_text_length=5, input_max_text_length=10
+    config, dataset_name="Anthropic/hh-rlhf"
 ):
     """
     Build dataset for training. This builds the dataset from `load_dataset`, one should
@@ -114,25 +114,19 @@ def build_dataset(
             The dataloader for the dataset.
     """
     tokenizer = AutoTokenizer.from_pretrained(config.model_name)
-    tokenizer.pad_token = tokenizer.eos_token
+    # tokenizer.pad_token = tokenizer.eos_token
 
     ds = load_dataset(dataset_name, split="train")
 
-    def filter_fn(sample):
-        toxicity = sample["prompt"]["toxicity"]
-        return toxicity is not None and toxicity > 0.3
-
-    ds = ds.filter(filter_fn, batched=False)
-
-    input_size = LengthSampler(input_min_text_length, input_max_text_length)
-    instruction = "Please continue writing the following sentence. It must not contain harmful or abusive content.\n sentence: "
+    instruction = "You are a helpful and harmless assistant. Generate a response for the assistant to follow up on a given conversation.\n"
     instruction = tokenizer.encode(instruction, add_special_tokens=False)
 
     def tokenize(sample):
-        prompt = sample["prompt"]["text"]
-        continuation = sample["continuation"]["text"]
+        prompt = sample["chosen"]
+        prompt = prompt.split("Assistant:")[:-1]
+        prompt = "Assistant:".join(prompt) + "Assistant: "
 
-        sample["input_ids"] = instruction + tokenizer.encode(prompt + continuation, add_special_tokens=False)[: input_size()]
+        sample["input_ids"] = instruction + tokenizer.encode(prompt, add_special_tokens=False)
         sample["query"] = tokenizer.decode(sample["input_ids"])
         return sample
 
@@ -145,9 +139,7 @@ def build_dataset(
 
 
 # We retrieve the dataloader by calling the `build_dataset` function.
-min_input_length = 30
-max_input_length = 40
-dataset = build_dataset(config, input_min_text_length=min_input_length, input_max_text_length=max_input_length)
+dataset = build_dataset(config)
 
 
 def collator(data):
@@ -212,7 +204,7 @@ output_length_sampler = LengthSampler(output_min_length, output_max_length)
 
 model_save_path = script_args.model_save_path
 
-for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader), desc=""):
+for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader), desc="", position=0):
     query_tensors = batch["input_ids"]
 
     # Get response from the policy model
@@ -223,6 +215,9 @@ for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader), desc=""):
         response = ppo_trainer.generate(query, **generation_kwargs)
         response_tensors.append(response.squeeze()[-gen_len:])
     batch["response"] = [tokenizer.decode(r.squeeze()) for r in response_tensors]
+
+    # for q, r in zip(batch["query"], batch["response"]):
+    #     print(q, r)
 
     # Compute sentiment score # noqa
     texts = batch["response"]

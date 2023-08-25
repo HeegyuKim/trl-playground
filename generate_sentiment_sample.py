@@ -1,5 +1,5 @@
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "3"
+os.environ["CUDA_VISIBLE_DEVICES"] = "2"
 
 from transformers import pipeline
 import jsonlines
@@ -8,19 +8,20 @@ import torch
 
 
 prompts = [
-    "please write a positive restaurant review",
-    "please write a negative restaurant review",
+    "Please write a positive restaurant review at least 2 sentences long. Don't make any mistakes in grammar.",
+    "Please write a negative restaurant review at least 2 sentences long. Don't make any mistakes in grammar.",
 ]
-output = "sentimental_review_baseline.jsonl"
-model_id = "google/flan-t5-base"
+output = "flan_sentimental_review_baseline.jsonl"
+model_id = "google/flan-t5-large"
 model = pipeline("text2text-generation", model_id, device=0 if torch.cuda.is_available() else "cpu")
 
 generation_kwargs = {
     "top_k": 0.0,
     "top_p": 1.0,
+    "temperature": 1.0,
     "num_return_sequences": 8,
     "max_new_tokens": 128,
-    "min_length": 5,
+    "min_length": 16,
     "do_sample": True,
     "early_stopping": True
 }
